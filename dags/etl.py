@@ -7,9 +7,9 @@ from datetime import datetime
 import logging
 
 
-path_xls = '/opt/airflow/data/vendas-combustiveis-2.xls'
-path_csv = '/opt/airflow/data/tratado.csv'
-sheets = ['DPCache_m3','DPCache_m3_2','DPCache_m3_3']
+path_in = '/opt/airflow/data/vendas-combustiveis-2.xls'
+path_out = '/opt/airflow/data/tratado.csv'
+# sheets = ['DPCache_m3','DPCache_m3_2','DPCache_m3_3']
 
 with DAG(
     dag_id='ETL',
@@ -18,7 +18,7 @@ with DAG(
         ) as dag:    
     
 
-    def read_and_merge(path_xls:str,sheets:str):
+    def read_and_merge(path_in:str,path_out:str):
         """
             read excel file and concat the relevant sheets in one dataframe
             args:
@@ -28,19 +28,14 @@ with DAG(
                 
         """
         
-        df_sheets = []
-        for sheet in sheets:
-            df_sheet = pd.read_excel(path_xls, sheet_name=sheet)
-            df_sheets.append(df_sheet)
 
-        #previously checked that the sheets has the same schema, so we can proceed with concat
-        df_concat = pd.concat(df_sheets)
+        df_sheet_m3 = pd.read_excel(path_in, sheet_name='DPCache_m3')
         
-        logging.info(f'Colunas do df concatenado: {df_concat.columns}')
-        logging.info(f'Shape do df concatenado: {df_concat.shape}')
+        logging.info(f'Colunas do df: {df_sheet_m3.columns}')
+        logging.info(f'Shape do df: {df_sheet_m3.shape}')
         
-        logging.info(f"Saving concatenated dataframe to csv file in: {path_csv}")
-        df_concat.to_csv(path_csv,index=True)
+        logging.info(f"Saving dataframe to csv file in: {path_out}")
+        df_sheet_m3.to_csv(path_out,index=True)
 
 
     def transform(path_csv:str):
@@ -53,8 +48,8 @@ with DAG(
         logging.info("reading csv file")
         df = pd.read_csv(path_csv)
 
-        logging.info("grouping dataframe")
-        df_grouped = df.groupby(['ESTADO','COMBUSTÍVEL','ANO']).sum()
+        logging.info('pivoting table')
+        dfp = df.pivot_table(columns='ANO',aggfunc='sum')        
         
         logging.info(f'Shape of grouped dataframe: {df_grouped.shape}')
 
