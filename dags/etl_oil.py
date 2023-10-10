@@ -9,8 +9,11 @@ import pandas as pd
 
 path_xlsx = '/opt/airflow/data/vendas-combustiveis-m3.xlsx'
 path_out = '/opt/airflow/data/extracted_oil.csv'
-# sheet_name = ['DPCache_m3','DPCache_m3_2','DPCache_m3_3']
+path_parquet = '/opt/airflow/data/oil_parquet'
 sheet_name = 'Plan1'
+cols_to_drop = ['TOTAL','REGIÃO']
+dict_m = {"Jan": 1, "Fev": 2, "Mar": 3, "Abr": 4, "Mai": 5,"Jun": 6, "Jul": 7, "Ago": 8, "Set": 9, "Out": 10, "Nov": 11, "Dez": 12}
+
 
 with DAG(
     dag_id='etl_oil',
@@ -19,15 +22,14 @@ with DAG(
         ) as dag:    
     
 
-    def extract_tables(path_xlsx:str,sheet_name:str):
+    def extract_tables(path_xlsx:str,path_out:str,sheet_name:str):
         """
-            read excel file and extract data from pivot tables
+            read excel file, extract data from pivot table and save the data in a csv file.
             args:
-                path, excel file path 
-                sheet_name,  sheet from the excel file where the pivoted table is
-            return:
-                csv file with data
-                
+                path_xlsx, excel file path;
+                path_out, where extracted data path will be saved; 
+                sheet_name,  name of sheet from the excel file where the pivoted table is.
+            return: None
         """
         from openpyxl import load_workbook
         from openpyxl.pivot.fields import Missing
@@ -71,32 +73,96 @@ with DAG(
             rows.append(row_dict)
   
         df = pd.DataFrame.from_dict(rows)
-        print(df)
 
+        df.to_csv(path_out)
 
-    def transform(path_csv:str):
+    
+    def transform(path_csv:str, path_parquet:str,cols_to_drop:list, dict_m:dict):
         """
-            Read dataframe and group it
-                args: path, The csv file path 
-                return: None
+            Read csv file from extracted the pivoted tables,
+            melt the months columns and return the dataframe with the appropriate schema.
+            The transformed dataframe is saved as a parquet file
+            args:
+                path_csv: path to the csv file
+                path_parquet: path to save parquet file
+                cols_to_drop: columns to be dropped from csv file 
+                dict_m: a dictionary to map the months name to the month number  
+            return: None
         """
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
         logging.info("Transforming")
-  
+
+        df = pd.read_csv(path_csv)
+        logging.info(f'Columns of df: {df.columns}')
+        logging.info(f'Shape of df: {df.shape}')
+
+        df.drop(columns=cols_to_drop, inplace=True)
+
+        #melt month columns
+        df = pd.melt(df, id_vars = ["COMBUSTÍVEL", "ANO", "ESTADO"], value_vars = dict_m.keys(), var_name = "month", value_name = "volume")
+
+        #create constant columns
+        df['unit'] = 'm3'
+        df['created_at'] = datetime.now()
+
+        # rename columns accordingly
+        df.rename(columns={'COMBUSTÍVEL': 'product','ESTADO': 'uf'},inplace=True)
+
+        #create year_month column
+        df['year_month'] = df['ANO'].astype(int).astype(str) + '-' + df['month'].replace(dict_m).astype(str)
+        df['year_month'] = pd.to_datetime(df['year_month'], format='%Y-%m')
+
+        #reordering columns accordingly
+        columns_order = ['year_month','uf','product','unit','volume','created_at']
+        df = df[columns_order]
+
+        logging.info(f"Columns of df: {df.columns}")
+        logging.info(f"Shape of df: {df.shape}")
+        logging.info(f"Data types: {df.dtypes}")
+        
+        # Setting right data types
+        df['uf'] = df['uf'].astype('string')
+        df['product'] = df['product'].astype('string')
+        df['unit'] = df['unit'].astype('string')
+        df['volume'] = pd.to_numeric(df['volume'])
+
+        logging.info(f"Final data types: {df.dtypes}")
+
+        logging.info(f'writing df as parquet file at {path_parquet}')
+        tab = pa.Table.from_pandas(df)
+        pq.write_table(tab, path_parquet, compression='SNAPPY')
+
+
+        # By experimenting, we found that --in this case-- saving as parquet with partitioned columns is not the best choice
+        # in terms of size of the final file.
+        # output_dir = '../data/partitioned_parquet_data'
+        # partition_cols = ['uf'];  25 partitions OR
+        # partition_cols = ['year_month'];  252 partitions 
+        # df.to_parquet(output_dir, partition_cols=partition_cols, engine='pyarrow')
+
     def valida():
+        """
+            Validação do output
+        """
         logging.info("Validando")
+        
+        def check_sum():
+            pass
         
 
     extract_pivot_table = PythonOperator(
         task_id = 'extract_pivot_tables',
         python_callable=extract_tables,
-        op_args=[path_xlsx,sheet_name]
+        op_args=[path_xlsx,path_out,sheet_name]
         )
 
-    # transform_df = PythonOperator(
-    #     task_id = 'transform',
-    #     python_callable=transform,
-    #     op_args=[path_out]
-    #     )
+    transform_df = PythonOperator(
+        task_id = 'transform',
+        python_callable=transform,
+        op_args=[path_out,path_parquet,cols_to_drop,dict_m]
+        )
     
     # validacao = PythonOperator(
     #     task_id = 'validacao',
@@ -104,5 +170,6 @@ with DAG(
     #     )
     
     
-    extract_pivot_table
+    extract_pivot_table >> transform_df
+
 
