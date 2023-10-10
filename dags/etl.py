@@ -51,7 +51,7 @@ with DAG(
         logging.info('pivoting table')
         dfp = df.pivot_table(columns='ANO',aggfunc='sum')        
         
-        logging.info(f'Shape of grouped dataframe: {df_grouped.shape}')
+        logging.info(f'Shape of grouped dataframe: {dfp.shape}')
 
     def valida():
         logging.info("validando")
@@ -60,13 +60,13 @@ with DAG(
     read_and_merge_dfs = PythonOperator(
         task_id = 'read_excel',
         python_callable=read_and_merge,
-        op_args=[path_xls,sheets]
+        op_args=[path_in,path_out]
         )
 
     transform_df = PythonOperator(
         task_id = 'transform',
         python_callable=transform,
-        op_args=[path_csv]
+        op_args=[path_out]
         )
     
     validacao = PythonOperator(
