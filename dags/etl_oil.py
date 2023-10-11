@@ -6,11 +6,16 @@ import logging
 
 import numpy as np
 import pandas as pd
+import sys
 
+#constant values
 path_xlsx = '/opt/airflow/data/vendas-combustiveis-m3.xlsx'
 path_out = '/opt/airflow/data/extracted_oil.csv'
 path_parquet = '/opt/airflow/data/oil_parquet'
 sheet_name = 'Plan1'
+range_cols = 'C:W'
+nrows=12
+skiprows = 52
 cols_to_drop = ['TOTAL','REGIÃO']
 dict_m = {"Jan": 1, "Fev": 2, "Mar": 3, "Abr": 4, "Mai": 5,"Jun": 6, "Jul": 7, "Ago": 8, "Set": 9, "Out": 10, "Nov": 11, "Dez": 12}
 
@@ -137,20 +142,67 @@ with DAG(
 
         # By experimenting, we found that --in this case-- saving as parquet with partitioned columns is not the best choice
         # in terms of size of the final file.
+        
         # output_dir = '../data/partitioned_parquet_data'
         # partition_cols = ['uf'];  25 partitions OR
         # partition_cols = ['year_month'];  252 partitions 
         # df.to_parquet(output_dir, partition_cols=partition_cols, engine='pyarrow')
 
-    def valida():
+    def valida(path_parquet:str,path_xlsx:str,sheet_name:str,range_cols:str,nrows:int,skiprows:int):
         """
-            Validação do output
+            Output validation
+
+            Compare total sum for each year both from the direct pivoted table and from the extracted parquet file.
+            If the relative difference between these sums is greater than a predefined tolerance (due to roundoff errors), return an error. 
         """
-        logging.info("Validando")
+
+        # total sum by year from the extracted parquet file 
+        df_p = pd.read_parquet(path_parquet)
+
+        df_p = df_p[['year_month','volume']]
         
-        def check_sum():
-            pass
+        df_p['ano'] = df_p['year_month'].dt.year
         
+        df_p.drop(columns=['year_month'],inplace=True)
+        
+        df_p = df_p.pivot_table(columns='ano',aggfunc='sum')
+        
+        s_oil_parquet = df_p.iloc[:].squeeze()
+        
+        new_index = [i for i in range(0,21)]
+
+        new_s = pd.Series(s_oil_parquet.values, index=new_index)
+
+        # Computing total sum direct from pivot table
+        df_total = pd.read_excel(path_xlsx,sheet_name=sheet_name,usecols=range_cols, nrows=nrows, skiprows=skiprows)
+        
+        logging.info('df_total:')
+        logging.info(df_total)
+
+        df_s =[]
+        for col in df_total.columns:
+            df_s.append(df_total[col].sum())
+
+        df_ss = pd.Series(df_s)
+        
+        ###########
+        aux_s = pd.concat([df_ss,new_s],axis=1)
+        logging.info(aux_s)
+        max_s  = aux_s.max(axis=1) 
+        logging.info(max_s)
+        relative_dif = ((new_s - df_ss).abs())/max_s
+        logging.info(relative_dif)
+
+        episilon = relative_dif < 0.00001
+        
+        if episilon.sum() == 21:
+            logging.info("Congrats!!")
+            logging.info("All the sums by year are matching within a tolerance of 10^-5.")
+        else:
+            logging.info('There is a difference in the sums! Analyze carefully!')
+            raise Exception("Sorry, you shall not pass!!")
+
+
 
     extract_pivot_table = PythonOperator(
         task_id = 'extract_pivot_tables',
@@ -164,12 +216,13 @@ with DAG(
         op_args=[path_out,path_parquet,cols_to_drop,dict_m]
         )
     
-    # validacao = PythonOperator(
-    #     task_id = 'validacao',
-    #     python_callable=valida,
-    #     )
+    validacao = PythonOperator(
+        task_id = 'validacao',
+        python_callable=valida,
+        op_args=[path_parquet,path_xlsx,sheet_name,range_cols,nrows,skiprows]
+
+        )
     
-    
-    extract_pivot_table >> transform_df
+    extract_pivot_table >> transform_df >> validacao
 
 
