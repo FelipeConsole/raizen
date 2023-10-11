@@ -13,6 +13,9 @@ Instruções de uso:
       sudo docker-compose up -d
   - acesse em seu navegador:
       http://localhost:8080/
+  - credenciais
+      user: airflow 
+      password: airflow 
 
 Lá podemos executar as DAGs desse repositório.  
 
